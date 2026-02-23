@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <title>バドミントン参加者管理プロトタイプ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      :root {
+        --bg: #f5f7fa;
+        --card-bg: #ffffff;
+        --primary: #1bb874; /* badminton green */
+        --primary-soft: #e2f6ec;
+        --accent: #00a3ff;
+        --danger: #ff5c5c;
+        --border: #d8e2ec;
+        --text-main: #1f2933;
+        --text-sub: #6c7a89;
+        --shadow-soft: 0 14px 30px rgba(15, 52, 96, 0.08);
+        --radius-lg: 18px;
+        --radius-md: 999px;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI",
+          system-ui, sans-serif;
+        background: radial-gradient(circle at top left, #e0f7ff 0, transparent 55%),
+          radial-gradient(circle at top right, #e5fff2 0, transparent 55%), var(--bg);
+        color: var(--text-main);
+        display: flex;
+        align-items: stretch;
+        justify-content: center;
+        padding: 32px 16px;
+      }
+
+      .app-shell {
+        width: 100%;
+        max-width: 960px;
+        background: linear-gradient(135deg, #f9fbff, #f3fbf7);
+        border-radius: 32px;
+        box-shadow: var(--shadow-soft);
+        padding: 24px 24px 28px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .court-accent {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .court-accent::before,
+      .court-accent::after {
+        content: "";
+        position: absolute;
+        border-radius: 24px;
+        border: 2px solid rgba(27, 184, 116, 0.12);
+      }
+
+      .court-accent::before {
+        inset: 14px 18px auto;
+      }
+
+      .court-accent::after {
+        inset: auto 120px 14px;
+        height: 72px;
+      }
+
+      header {
+        position: relative;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 20px;
+        z-index: 1;
+      }
+
+      .title-group {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .shuttle-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        background: radial-gradient(circle at 30% 20%, #ffffff, #e7f9ff);
+        box-shadow: 0 8px 18px rgba(15, 52, 96, 0.15);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      }
+
+      .shuttle-head {
+        width: 14px;
+        height: 14px;
+        border-radius: 999px;
+        background: #ffffff;
+        border: 2px solid #d7e2f2;
+        position: relative;
+        top: -2px;
+      }
+
+      .shuttle-feather {
+        position: absolute;
+        bottom: 5px;
+        width: 24px;
+        height: 12px;
+        border-radius: 999px;
+        border: 2px solid var(--primary);
+        border-top: none;
+        transform: rotate(-18deg);
+        border-style: solid;
+        border-color: var(--primary);
+      }
+
+      .shuttle-feather::before,
+      .shuttle-feather::after {
+        content: "";
+        position: absolute;
+        inset: -1px 6px auto;
+        border-top: 2px solid rgba(27, 184, 116, 0.6);
+      }
+
+      .shuttle-feather::after {
+        inset-inline: 12px 0;
+      }
+
+      h1 {
+        font-size: 20px;
+        letter-spacing: 0.03em;
+        margin: 0;
+        font-weight: 700;
+      }
+
+      .subtitle {
+        margin-top: 2px;
+        font-size: 12px;
+        color: var(--text-sub);
+      }
+
+      .badge-session {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(0, 163, 255, 0.2);
+        background: rgba(0, 163, 255, 0.05);
+        color: #0066b3;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .badge-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #00a3ff;
+      }
+
+      main {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+        gap: 20px;
+        z-index: 1;
+      }
+
+      @media (max-width: 768px) {
+        .app-shell {
+          padding: 18px 16px 22px;
+          border-radius: 24px;
+        }
+        header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        main {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+
+      .panel {
+        background: var(--card-bg);
+        border-radius: var(--radius-lg);
+        border: 1px solid rgba(216, 226, 236, 0.7);
+        padding: 16px 16px 18px;
+        box-shadow: 0 10px 22px rgba(15, 52, 96, 0.04);
+      }
+
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 12px;
+      }
+
+      .panel-title {
+        font-size: 14px;
+        font-weight: 600;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .panel-title-pill {
+        width: 6px;
+        height: 16px;
+        border-radius: 999px;
+        background: linear-gradient(180deg, var(--primary), #0f9960);
+      }
+
+      .panel-caption {
+        font-size: 11px;
+        color: var(--text-sub);
+      }
+
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+      }
+
+      .field-label-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+      }
+
+      label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-main);
+      }
+
+      .field-helper {
+        font-size: 11px;
+        color: var(--text-sub);
+      }
+
+      input[type="text"],
+      input[type="number"],
+      select {
+        appearance: none;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        padding: 8px 12px;
+        font-size: 13px;
+        outline: none;
+        background: #f9fbff;
+        transition: border-color 0.16s ease, box-shadow 0.16s ease, background 0.16s ease,
+          transform 0.05s ease;
+      }
+
+      input[type="text"]:focus,
+      input[type="number"]:focus,
+      select:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 1px rgba(27, 184, 116, 0.25);
+        background: #ffffff;
+        transform: translateY(-0.5px);
+      }
+
+      .field-row {
+        display: grid;
+        grid-template-columns: 1.2fr 0.9fr;
+        gap: 10px;
+      }
+
+      @media (max-width: 480px) {
+        .field-row {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      .badge-toggle {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px;
+        border-radius: var(--radius-md);
+        background: #f1f5f9;
+        gap: 2px;
+      }
+
+      .badge-toggle button {
+        border: none;
+        background: transparent;
+        padding: 4px 10px;
+        border-radius: 999px;
+        font-size: 11px;
+        cursor: pointer;
+        color: var(--text-sub);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        transition: background 0.14s ease, color 0.14s ease, transform 0.04s ease;
+      }
+
+      .badge-toggle button span {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+        background: #cbd5e1;
+      }
+
+      .badge-toggle button[data-active="true"] {
+        color: #ffffff;
+        transform: translateY(-0.5px);
+      }
+
+      .badge-toggle button[data-mode="serious"][data-active="true"] {
+        background: linear-gradient(120deg, #ff5c5c, #ff8f70);
+      }
+
+      .badge-toggle button[data-mode="enjoy"][data-active="true"] {
+        background: linear-gradient(120deg, #00a3ff, #42d0ff);
+      }
+
+      .badge-toggle button[data-mode="serious"][data-active="true"] span {
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .badge-toggle button[data-mode="enjoy"][data-active="true"] span {
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .actions-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        margin-top: 4px;
+      }
+
+      .text-light {
+        font-size: 11px;
+        color: var(--text-sub);
+      }
+
+      button[type="submit"] {
+        border-radius: 999px;
+        border: none;
+        background: linear-gradient(135deg, var(--primary), #0f9960);
+        color: white;
+        font-size: 13px;
+        font-weight: 600;
+        padding: 8px 18px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 10px 18px rgba(4, 120, 87, 0.28);
+        transition: transform 0.06s ease, box-shadow 0.08s ease, filter 0.08s ease;
+      }
+
+      button[type="submit"]:hover {
+        transform: translateY(-1px);
+        filter: brightness(1.03);
+        box-shadow: 0 14px 22px rgba(4, 120, 87, 0.33);
+      }
+
+      button[type="submit"]:active {
+        transform: translateY(0.5px) scale(0.99);
+        box-shadow: 0 7px 14px rgba(4, 120, 87, 0.22);
+      }
+
+      .btn-icon {
+        width: 18px;
+        height: 18px;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.8);
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        background: rgba(255, 255, 255, 0.2);
+      }
+
+      .error {
+        font-size: 11px;
+        color: var(--danger);
+        margin-top: 2px;
+        min-height: 14px;
+      }
+
+      .list-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .list-count {
+        font-size: 11px;
+        color: var(--text-sub);
+      }
+
+      .list-container {
+        border-radius: 14px;
+        background: #f8fafc;
+        border: 1px dashed rgba(148, 163, 184, 0.6);
+        padding: 8px 10px;
+        max-height: 340px;
+        overflow: auto;
+      }
+
+      .empty-state {
+        font-size: 12px;
+        color: var(--text-sub);
+        text-align: center;
+        padding: 16px 8px;
+      }
+
+      .player-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) auto auto;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 4px;
+        border-radius: 12px;
+        position: relative;
+      }
+
+      .player-row::after {
+        content: "";
+        position: absolute;
+        inset: auto 6px 0;
+        border-bottom: 1px dashed rgba(203, 213, 225, 0.7);
+      }
+
+      .player-row:last-child::after {
+        display: none;
+      }
+
+      .player-main {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+
+      .player-name {
+        font-size: 13px;
+        font-weight: 600;
+      }
+
+      .player-meta {
+        font-size: 11px;
+        color: var(--text-sub);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .rate-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(15, 23, 42, 0.12);
+        background: rgba(255, 255, 255, 0.9);
+        font-size: 11px;
+      }
+
+      .rate-pill span {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--primary);
+      }
+
+      .mode-pill {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 500;
+      }
+
+      .mode-pill[data-mode="serious"] {
+        background: rgba(255, 92, 92, 0.07);
+        color: #b91c1c;
+      }
+
+      .mode-pill[data-mode="serious"] .mode-dot {
+        background: #ef4444;
+      }
+
+      .mode-pill[data-mode="enjoy"] {
+        background: rgba(0, 163, 255, 0.07);
+        color: #0369a1;
+      }
+
+      .mode-pill[data-mode="enjoy"] .mode-dot {
+        background: #0ea5e9;
+      }
+
+      .mode-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 999px;
+      }
+
+      .ghost-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(148, 163, 184, 0.95);
+      }
+
+      .chip {
+        font-size: 10px;
+        padding: 2px 7px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.03);
+        border: 1px solid rgba(148, 163, 184, 0.55);
+      }
+
+      .list-footer {
+        margin-top: 8px;
+        display: flex;
+        justify-content: flex-end;
+        gap: 10px;
+        align-items: center;
+        font-size: 10px;
+        color: var(--text-sub);
+      }
+
+      .list-footer span {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .small-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 999px;
+        background: var(--primary);
+      }
+
+      .small-dot.blue {
+        background: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <div class="court-accent"></div>
+      <header>
+        <div class="title-group">
+          <div class="shuttle-icon" aria-hidden="true">
+            <div class="shuttle-head"></div>
+            <div class="shuttle-feather"></div>
+          </div>
+          <div>
+            <h1>バドミントン参加メンバー</h1>
+            <p class="subtitle">その場でサクッとメンバーを記録する小さなツールです</p>
+          </div>
+        </div>
+        <span class="badge-session">
+          <span class="badge-dot"></span>
+          本日のセッション
+        </span>
+      </header>
+
+      <main>
+        <section class="panel" aria-label="参加者を追加するフォーム">
+          <div class="panel-header">
+            <div class="panel-title">
+              <span class="panel-title-pill"></span>
+              新しい参加者を追加
+            </div>
+            <span class="panel-caption">名前とレート、雰囲気を入力してください</span>
+          </div>
+
+          <form id="player-form" autocomplete="off">
+            <div class="field">
+              <div class="field-label-row">
+                <label for="name">名前</label>
+                <span class="field-helper">必須</span>
+              </div>
+              <input
+                id="name"
+                type="text"
+                placeholder="例）佐藤 太郎"
+                inputmode="text"
+              />
+              <div id="name-error" class="error"></div>
+            </div>
+
+            <div class="field-row">
+              <div class="field">
+                <div class="field-label-row">
+                  <label for="rate">レート</label>
+                  <span class="field-helper">1 〜 10（なんとなくの目安でOK）</span>
+                </div>
+                <input
+                  id="rate"
+                  type="number"
+                  min="1"
+                  max="10"
+                  step="1"
+                  placeholder="例）6"
+                />
+              </div>
+
+              <div class="field">
+                <div class="field-label-row">
+                  <label>プレースタイル</label>
+                  <span class="field-helper">どんな雰囲気でやりたいか</span>
+                </div>
+                <div class="badge-toggle" role="radiogroup" aria-label="プレースタイル">
+                  <button
+                    type="button"
+                    id="mode-serious"
+                    data-mode="serious"
+                    data-active="true"
+                    aria-pressed="true"
+                  >
+                    <span></span>
+                    ガチ
+                  </button>
+                  <button
+                    type="button"
+                    id="mode-enjoy"
+                    data-mode="enjoy"
+                    data-active="false"
+                    aria-pressed="false"
+                  >
+                    <span></span>
+                    エンジョイ
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="actions-row">
+              <p class="text-light">入力後、「参加者を追加」を押すと右側のリストに反映されます。</p>
+              <button type="submit">
+                <span class="btn-icon">＋</span>
+                参加者を追加
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" aria-label="参加者リスト">
+          <div class="list-header">
+            <div>
+              <div class="panel-title">
+                <span class="panel-title-pill"></span>
+                参加者リスト
+              </div>
+              <div class="panel-caption">
+                名前・レート・プレースタイルのバランスを見ながらゲームを組めます
+              </div>
+            </div>
+            <div class="list-count" id="player-count">
+              登録済み：0人
+            </div>
+          </div>
+
+          <div class="list-container" id="player-list">
+            <div class="empty-state">
+              まだ参加者が登録されていません。<br />
+              左のフォームから最初のメンバーを追加してみてください。
+            </div>
+          </div>
+
+          <div class="list-footer">
+            <span>
+              <span class="small-dot"></span>
+              ガチ
+            </span>
+            <span>
+              <span class="small-dot blue"></span>
+              エンジョイ
+            </span>
+            <span class="chip">ブラウザを閉じるとリセットされます</span>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      (function () {
+        /** @type {{ name: string; rate: number; mode: 'serious' | 'enjoy' }[]} */
+        const players = [];
+
+        const form = document.getElementById("player-form");
+        const nameInput = document.getElementById("name");
+        const rateInput = document.getElementById("rate");
+        const nameError = document.getElementById("name-error");
+        const playerList = document.getElementById("player-list");
+        const playerCount = document.getElementById("player-count");
+        const btnSerious = document.getElementById("mode-serious");
+        const btnEnjoy = document.getElementById("mode-enjoy");
+
+        let currentMode = "serious";
+
+        function setMode(mode) {
+          currentMode = mode;
+          const isSerious = mode === "serious";
+
+          btnSerious.dataset.active = isSerious ? "true" : "false";
+          btnSerious.setAttribute("aria-pressed", isSerious ? "true" : "false");
+
+          btnEnjoy.dataset.active = !isSerious ? "true" : "false";
+          btnEnjoy.setAttribute("aria-pressed", !isSerious ? "true" : "false");
+        }
+
+        btnSerious.addEventListener("click", function () {
+          setMode("serious");
+        });
+
+        btnEnjoy.addEventListener("click", function () {
+          setMode("enjoy");
+        });
+
+        function renderPlayers() {
+          if (players.length === 0) {
+            playerList.innerHTML =
+              '<div class="empty-state">まだ参加者が登録されていません。<br />左のフォームから最初のメンバーを追加してみてください。</div>';
+          } else {
+            playerList.innerHTML = "";
+            players.forEach(function (p, index) {
+              const row = document.createElement("div");
+              row.className = "player-row";
+              row.innerHTML =
+                '<div class="player-main">' +
+                '<div class="player-name">' +
+                String(index + 1).padStart(2, "0") +
+                ". " +
+                escapeHtml(p.name) +
+                "</div>" +
+                '<div class="player-meta">' +
+                '<span class="ghost-label">RATE</span>' +
+                '<span class="rate-pill"><span></span>' +
+                p.rate.toFixed(0) +
+                "/10</span>" +
+                "</div>" +
+                "</div>" +
+                '<div class="mode-pill" data-mode="' +
+                p.mode +
+                '">' +
+                '<span class="mode-dot"></span>' +
+                (p.mode === "serious" ? "ガチ" : "エンジョイ") +
+                "</div>" +
+                '<div class="ghost-label">PLAYER</div>';
+
+              playerList.appendChild(row);
+            });
+          }
+
+          playerCount.textContent = "登録済み：" + players.length + "人";
+        }
+
+        function escapeHtml(str) {
+          return String(str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#039;");
+        }
+
+        function onSubmit(event) {
+          event.preventDefault();
+          nameError.textContent = "";
+
+          const name = nameInput.value.trim();
+          const rateRaw = rateInput.value.trim();
+
+          if (!name) {
+            nameError.textContent = "名前を入力してください。";
+            nameInput.focus();
+            return;
+          }
+
+          let rate = 5;
+          if (rateRaw) {
+            const parsed = Number(rateRaw);
+            if (!Number.isNaN(parsed)) {
+              rate = Math.min(10, Math.max(1, parsed));
+            }
+          }
+
+          players.push({
+            name: name,
+            rate: rate,
+            mode: currentMode,
+          });
+
+          nameInput.value = "";
+          rateInput.value = "";
+          nameInput.focus();
+
+          renderPlayers();
+        }
+
+        form.addEventListener("submit", onSubmit);
+        renderPlayers();
+      })();
+    </script>
+  </body>
+</html>
+
