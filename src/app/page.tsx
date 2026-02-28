@@ -1079,11 +1079,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setSelectedTab("pairDisplay")}
-            className={`rounded-lg px-3 py-2 font-medium ${
-              selectedTab === "pairDisplay"
-                ? "bg-white text-gray-900 shadow"
-                : "text-gray-700 hover:bg-gray-100"
-            }`}
+            className="rounded-lg px-3 py-2 font-medium text-gray-700 hover:bg-gray-100"
           >
             ペア表示
           </button>
