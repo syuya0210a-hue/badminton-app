@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "@/lib/supabase";
 
 type MatchMode = "serious" | "enjoy"; // ガチ / エンジョイ
 type MatchType = "single" | "double"; // シングル / ダブル
@@ -93,6 +94,28 @@ function saveToStorage<T>(key: string, value: T) {
 const MEMBERS_STORAGE_KEY = "badminton_members_v1";
 const MATCHES_STORAGE_KEY = "badminton_matches_v1";
 
+type StoredMember = {
+  id: string;
+  name: string;
+  activeToday?: boolean;
+  initialRating?: number;
+  isAdmin?: boolean;
+  gender?: "male" | "female";
+  isBeginner?: boolean;
+};
+
+function memberFromStorage(m: StoredMember): Member {
+  return {
+    id: m.id,
+    name: m.name,
+    activeToday: m.activeToday ?? false,
+    initialRating: m.initialRating ?? INITIAL_RATING,
+    isAdmin: m.isAdmin ?? false,
+    gender: m.gender,
+    isBeginner: m.isBeginner ?? false,
+  };
+}
+
 export default function Home() {
   const [members, setMembers] = useState<Member[]>([]);
   const [matches, setMatches] = useState<MatchRecord[]>([]);
@@ -116,35 +139,89 @@ export default function Home() {
   const [swapSource, setSwapSource] = useState<SwapSource | null>(null);
   const [chartMemberId, setChartMemberId] = useState<string>("");
   const [statsDetailMemberId, setStatsDetailMemberId] = useState<string | null>(null);
+  const [dataLoaded, setDataLoaded] = useState(false);
 
-  // 初期ロード（旧データの rating/wins/losses は無視し、試合履歴から再計算する）
+  // 初期ロード（Supabase があればそこから、なければ localStorage）
   useEffect(() => {
-    const storedMembers = loadFromStorage<
-      { id: string; name: string; activeToday?: boolean; initialRating?: number; isAdmin?: boolean; gender?: "male" | "female"; isBeginner?: boolean }[]
-    >(MEMBERS_STORAGE_KEY, []);
-    const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
-    setMembers(
-      storedMembers.map((m) => ({
-        id: m.id,
-        name: m.name,
-        activeToday: m.activeToday ?? false,
-        initialRating: m.initialRating ?? INITIAL_RATING,
-        isAdmin: m.isAdmin ?? false,
-        gender: m.gender,
-        isBeginner: m.isBeginner ?? false,
-      })),
-    );
-    setMatches(storedMatches);
+    let cancelled = false;
+    async function load() {
+      if (supabase) {
+        const { data, error } = await supabase
+          .from("app_data")
+          .select("key, value")
+          .in("key", ["members", "matches"]);
+        if (!cancelled && !error && data) {
+          const membersRow = data.find((r) => r.key === "members");
+          const matchesRow = data.find((r) => r.key === "matches");
+          const storedMembers = (membersRow?.value as StoredMember[] | null) ?? [];
+          const storedMatches = (matchesRow?.value as MatchRecord[] | null) ?? [];
+          setMembers(storedMembers.map(memberFromStorage));
+          setMatches(Array.isArray(storedMatches) ? storedMatches : []);
+        } else if (!cancelled && error) {
+          console.error("Supabase load error:", error);
+          const storedMembers = loadFromStorage<StoredMember[]>(MEMBERS_STORAGE_KEY, []);
+          const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
+          setMembers(storedMembers.map(memberFromStorage));
+          setMatches(storedMatches);
+        }
+      } else {
+        const storedMembers = loadFromStorage<StoredMember[]>(MEMBERS_STORAGE_KEY, []);
+        const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
+        setMembers(storedMembers.map(memberFromStorage));
+        setMatches(storedMatches);
+      }
+      if (!cancelled) setDataLoaded(true);
+    }
+    load();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // 永続化
+  // 永続化（Supabase があればそこへ、なければ localStorage）
   useEffect(() => {
-    saveToStorage(MEMBERS_STORAGE_KEY, members);
-  }, [members]);
+    if (!dataLoaded) return;
+    if (supabase) {
+      supabase
+        .from("app_data")
+        .upsert(
+          [
+            {
+              key: "members",
+              value: members.map((m) => ({
+                id: m.id,
+                name: m.name,
+                activeToday: m.activeToday,
+                initialRating: m.initialRating ?? INITIAL_RATING,
+                isAdmin: m.isAdmin ?? false,
+                gender: m.gender ?? null,
+                isBeginner: m.isBeginner ?? false,
+              })),
+            },
+          ],
+          { onConflict: "key" },
+        )
+        .then(({ error }) => {
+          if (error) console.error("Supabase save members error:", error);
+        });
+    } else {
+      saveToStorage(MEMBERS_STORAGE_KEY, members);
+    }
+  }, [members, dataLoaded]);
 
   useEffect(() => {
-    saveToStorage(MATCHES_STORAGE_KEY, matches);
-  }, [matches]);
+    if (!dataLoaded) return;
+    if (supabase) {
+      supabase
+        .from("app_data")
+        .upsert([{ key: "matches", value: matches }], { onConflict: "key" })
+        .then(({ error }) => {
+          if (error) console.error("Supabase save matches error:", error);
+        });
+    } else {
+      saveToStorage(MATCHES_STORAGE_KEY, matches);
+    }
+  }, [matches, dataLoaded]);
 
   const activeMembers = useMemo(
     () => members.filter((m) => m.activeToday),
@@ -874,6 +951,15 @@ export default function Home() {
     [matches],
   );
 
+  // データ読み込み中
+  if (!dataLoaded) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50 text-gray-700">
+        <p className="text-lg font-medium">読み込み中...</p>
+      </div>
+    );
+  }
+
   // ペア表示タブ時は画面いっぱいの専用ビュー（iPad用・横画面で全コート一覧）
   if (selectedTab === "pairDisplay") {
     const courtCount = generatedCourts.length;
@@ -1079,11 +1165,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => setSelectedTab("pairDisplay")}
-            className={`rounded-lg px-3 py-2 font-medium ${
-              (selectedTab as "members" | "pair" | "pairDisplay" | "history" | "stats") === "pairDisplay"
-                ? "bg-white text-gray-900 shadow"
-                : "text-gray-700 hover:bg-gray-100"
-            }`}
+            className="rounded-lg px-3 py-2 font-medium text-gray-700 hover:bg-gray-100"
           >
             ペア表示
           </button>
