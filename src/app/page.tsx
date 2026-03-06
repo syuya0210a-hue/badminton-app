@@ -715,6 +715,16 @@ export default function Home() {
     );
   };
 
+  const handleToggleCourtMode = (courtNumber: number) => {
+    setGeneratedCourts((prev) =>
+      prev.map((c) =>
+        c.courtNumber === courtNumber
+          ? { ...c, mode: c.mode === "serious" ? "enjoy" : "serious" }
+          : c,
+      ),
+    );
+  };
+
   const memberStatsSorted = useMemo(
     () =>
       [...members]
@@ -1029,9 +1039,18 @@ export default function Home() {
                         {typeLabel}
                       </span>
                     </div>
-                    <div className="mb-1 rounded bg-blue-50 px-2 py-0.5 text-center text-xs font-semibold text-blue-800">
+                    <button
+                      type="button"
+                      className={`mb-1 w-full rounded px-2 py-0.5 text-center text-xs font-semibold ${
+                        court.mode === "serious"
+                          ? "bg-blue-50 text-blue-800"
+                          : "bg-orange-50 text-orange-800"
+                      }`}
+                      onClick={() => handleToggleCourtMode(court.courtNumber)}
+                      title="タップでガチ⇔エンジョイを切り替え"
+                    >
                       {modeLabel}
-                    </div>
+                    </button>
                     <div
                       className="flex min-h-0 flex-1 flex-col justify-center gap-0 overflow-hidden"
                       style={{ minHeight: 0 }}
@@ -1603,11 +1622,13 @@ export default function Home() {
                                 </span>
                               </div>
                               <span
-                                className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                                className={`rounded-full px-2 py-0.5 text-xs font-semibold cursor-pointer hover:opacity-90 ${
                                   court.mode === "serious"
                                     ? "bg-blue-100 text-blue-800"
                                     : "bg-orange-100 text-orange-800"
                                 }`}
+                                onClick={() => handleToggleCourtMode(court.courtNumber)}
+                                title="クリックでガチ⇔エンジョイを切り替え"
                               >
                                 {modeLabel}
                               </span>
