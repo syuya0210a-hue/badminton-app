@@ -361,7 +361,7 @@ async function parseCalendarByUseDateInputs(page: Page, config: CheckConfig): Pr
     const value = await input.getAttribute("value").catch(() => null);
     if (!value || value.length < 10) continue;
     const dateStr = value.slice(0, 10);
-    const nameAttr = await input.getAttribute("name").catch(() => "");
+    const nameAttr = (await input.getAttribute("name").catch(() => "")) || "";
     const calendarIndexMatch = nameAttr.match(/Calendar\[(\d+)\]/);
     const facilityIndex = calendarIndexMatch ? parseInt(calendarIndexMatch[1], 10) : -1;
     const facilityName = facilityIndex >= 0 && facilityIndex < config.facilityNames.length
