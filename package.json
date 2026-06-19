@@ -6,7 +6,10 @@
     "dev": "next dev --hostname 127.0.0.1",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check": "cd scripts && npm run check",
+    "schedule": "cd scripts && npm run schedule",
+    "line-user-id": "cd scripts && npm run line-user-id"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.98.0",

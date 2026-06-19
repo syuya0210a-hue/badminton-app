@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { supabase } from "@/lib/supabase";
 
 type MatchMode = "serious" | "enjoy"; // ガチ / エンジョイ
 type MatchType = "single" | "double"; // シングル / ダブル
@@ -141,86 +140,24 @@ export default function Home() {
   const [statsDetailMemberId, setStatsDetailMemberId] = useState<string | null>(null);
   const [dataLoaded, setDataLoaded] = useState(false);
 
-  // 初期ロード（Supabase があればそこから、なければ localStorage）
+  // 初期ロード（端末ごとの localStorage）
   useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      if (supabase) {
-        const { data, error } = await supabase
-          .from("app_data")
-          .select("key, value")
-          .in("key", ["members", "matches"]);
-        if (!cancelled && !error && data) {
-          const membersRow = data.find((r) => r.key === "members");
-          const matchesRow = data.find((r) => r.key === "matches");
-          const storedMembers = (membersRow?.value as StoredMember[] | null) ?? [];
-          const storedMatches = (matchesRow?.value as MatchRecord[] | null) ?? [];
-          setMembers(storedMembers.map(memberFromStorage));
-          setMatches(Array.isArray(storedMatches) ? storedMatches : []);
-        } else if (!cancelled && error) {
-          console.error("Supabase load error:", error);
-          const storedMembers = loadFromStorage<StoredMember[]>(MEMBERS_STORAGE_KEY, []);
-          const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
-          setMembers(storedMembers.map(memberFromStorage));
-          setMatches(storedMatches);
-        }
-      } else {
-        const storedMembers = loadFromStorage<StoredMember[]>(MEMBERS_STORAGE_KEY, []);
-        const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
-        setMembers(storedMembers.map(memberFromStorage));
-        setMatches(storedMatches);
-      }
-      if (!cancelled) setDataLoaded(true);
-    }
-    load();
-    return () => {
-      cancelled = true;
-    };
+    const storedMembers = loadFromStorage<StoredMember[]>(MEMBERS_STORAGE_KEY, []);
+    const storedMatches = loadFromStorage<MatchRecord[]>(MATCHES_STORAGE_KEY, []);
+    setMembers(storedMembers.map(memberFromStorage));
+    setMatches(storedMatches);
+    setDataLoaded(true);
   }, []);
 
-  // 永続化（Supabase があればそこへ、なければ localStorage）
+  // 永続化（端末ごとの localStorage）
   useEffect(() => {
     if (!dataLoaded) return;
-    if (supabase) {
-      supabase
-        .from("app_data")
-        .upsert(
-          [
-            {
-              key: "members",
-              value: members.map((m) => ({
-                id: m.id,
-                name: m.name,
-                activeToday: m.activeToday,
-                initialRating: m.initialRating ?? INITIAL_RATING,
-                isAdmin: m.isAdmin ?? false,
-                gender: m.gender ?? null,
-                isBeginner: m.isBeginner ?? false,
-              })),
-            },
-          ],
-          { onConflict: "key" },
-        )
-        .then(({ error }) => {
-          if (error) console.error("Supabase save members error:", error);
-        });
-    } else {
-      saveToStorage(MEMBERS_STORAGE_KEY, members);
-    }
+    saveToStorage(MEMBERS_STORAGE_KEY, members);
   }, [members, dataLoaded]);
 
   useEffect(() => {
     if (!dataLoaded) return;
-    if (supabase) {
-      supabase
-        .from("app_data")
-        .upsert([{ key: "matches", value: matches }], { onConflict: "key" })
-        .then(({ error }) => {
-          if (error) console.error("Supabase save matches error:", error);
-        });
-    } else {
-      saveToStorage(MATCHES_STORAGE_KEY, matches);
-    }
+    saveToStorage(MATCHES_STORAGE_KEY, matches);
   }, [matches, dataLoaded]);
 
   const activeMembers = useMemo(
