@@ -17,6 +17,8 @@ type Member = {
   gender?: "male" | "female";
   /** 初心者フラグ（ペア表示で🔰を表示） */
   isBeginner?: boolean;
+  /** 本日の試合回数の手動調整（途中参加者向け。実際の試合数に加算） */
+  todayParticipationOffset?: { date: string; offset: number };
 };
 
 type MemberStats = {
@@ -29,7 +31,7 @@ type MemberStats = {
   enjoyLosses: number;
 };
 
-type WinnerSide = "A" | "B";
+type MatchResult = "A" | "B" | "invalid";
 
 type GeneratedCourt = {
   courtNumber: number;
@@ -49,12 +51,308 @@ type MatchRecord = {
   courtNumber: number;
   teamAIds: string[];
   teamBIds: string[];
-  winner: WinnerSide;
+  winner: MatchResult;
 };
 
 const INITIAL_RATING = 1000;
 const K_FACTOR = 32;
 const MAX_RATING_GAP_FOR_PAIR_AVOID = 150;
+const PAIR_COUNT_WEIGHT = 1000;
+
+type CourtAssignment = { teamAIds: string[]; teamBIds: string[] };
+type CourtSlotRef = { courtIdx: number; team: "A" | "B"; playerIdx: number };
+
+function makePairKey(a: string, b: string) {
+  return [a, b].sort().join("-");
+}
+
+function getTodayPairCount(
+  pairCountToday: Map<string, number>,
+  a: string,
+  b: string,
+): number {
+  return pairCountToday.get(makePairKey(a, b)) ?? 0;
+}
+
+function averageRating(
+  ids: string[],
+  getRating: (id: string) => number,
+): number {
+  if (ids.length === 0) return 0;
+  return ids.reduce((sum, id) => sum + getRating(id), 0) / ids.length;
+}
+
+function scoreCourtAssignment(
+  court: CourtAssignment,
+  matchType: MatchType,
+  getRating: (id: string) => number,
+  pairCountToday: Map<string, number>,
+): number {
+  let pairCost = 0;
+  if (matchType === "double") {
+    if (court.teamAIds.length === 2) {
+      pairCost += getTodayPairCount(
+        pairCountToday,
+        court.teamAIds[0],
+        court.teamAIds[1],
+      );
+    }
+    if (court.teamBIds.length === 2) {
+      pairCost += getTodayPairCount(
+        pairCountToday,
+        court.teamBIds[0],
+        court.teamBIds[1],
+      );
+    }
+  } else if (court.teamAIds[0] && court.teamBIds[0]) {
+    pairCost += getTodayPairCount(
+      pairCountToday,
+      court.teamAIds[0],
+      court.teamBIds[0],
+    );
+  }
+  const gap = Math.abs(
+    averageRating(court.teamAIds, getRating) -
+      averageRating(court.teamBIds, getRating),
+  );
+  return pairCost * PAIR_COUNT_WEIGHT + gap;
+}
+
+function scoreAllCourtAssignments(
+  courts: CourtAssignment[],
+  matchType: MatchType,
+  getRating: (id: string) => number,
+  pairCountToday: Map<string, number>,
+): number {
+  return courts.reduce(
+    (sum, court) =>
+      sum + scoreCourtAssignment(court, matchType, getRating, pairCountToday),
+    0,
+  );
+}
+
+function cloneCourtAssignments(courts: CourtAssignment[]): CourtAssignment[] {
+  return courts.map((court) => ({
+    teamAIds: [...court.teamAIds],
+    teamBIds: [...court.teamBIds],
+  }));
+}
+
+function getCourtSlotValue(
+  courts: CourtAssignment[],
+  ref: CourtSlotRef,
+): string {
+  const court = courts[ref.courtIdx];
+  return ref.team === "A"
+    ? court.teamAIds[ref.playerIdx]
+    : court.teamBIds[ref.playerIdx];
+}
+
+function setCourtSlotValue(
+  courts: CourtAssignment[],
+  ref: CourtSlotRef,
+  playerId: string,
+): CourtAssignment[] {
+  return courts.map((court, courtIdx) => {
+    if (courtIdx !== ref.courtIdx) {
+      return { teamAIds: [...court.teamAIds], teamBIds: [...court.teamBIds] };
+    }
+    if (ref.team === "A") {
+      const teamAIds = [...court.teamAIds];
+      teamAIds[ref.playerIdx] = playerId;
+      return { ...court, teamAIds };
+    }
+    const teamBIds = [...court.teamBIds];
+    teamBIds[ref.playerIdx] = playerId;
+    return { ...court, teamBIds };
+  });
+}
+
+function swapCourtSlots(
+  courts: CourtAssignment[],
+  a: CourtSlotRef,
+  b: CourtSlotRef,
+): CourtAssignment[] {
+  const valueA = getCourtSlotValue(courts, a);
+  const valueB = getCourtSlotValue(courts, b);
+  let next = setCourtSlotValue(courts, a, valueB);
+  next = setCourtSlotValue(next, b, valueA);
+  return next;
+}
+
+function listCourtSlotRefs(courts: CourtAssignment[]): CourtSlotRef[] {
+  const refs: CourtSlotRef[] = [];
+  courts.forEach((court, courtIdx) => {
+    court.teamAIds.forEach((_, playerIdx) => {
+      refs.push({ courtIdx, team: "A", playerIdx });
+    });
+    court.teamBIds.forEach((_, playerIdx) => {
+      refs.push({ courtIdx, team: "B", playerIdx });
+    });
+  });
+  return refs;
+}
+
+function optimizeCourtAssignments(
+  initial: CourtAssignment[],
+  matchType: MatchType,
+  getRating: (id: string) => number,
+  pairCountToday: Map<string, number>,
+): CourtAssignment[] {
+  let current = cloneCourtAssignments(initial);
+  let currentScore = scoreAllCourtAssignments(
+    current,
+    matchType,
+    getRating,
+    pairCountToday,
+  );
+  let improved = true;
+  let iterations = 0;
+
+  while (improved && iterations < 200) {
+    improved = false;
+    iterations += 1;
+    const slots = listCourtSlotRefs(current);
+    for (let i = 0; i < slots.length; i++) {
+      for (let j = i + 1; j < slots.length; j++) {
+        const candidate = swapCourtSlots(current, slots[i], slots[j]);
+        const candidateScore = scoreAllCourtAssignments(
+          candidate,
+          matchType,
+          getRating,
+          pairCountToday,
+        );
+        if (candidateScore < currentScore) {
+          current = candidate;
+          currentScore = candidateScore;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return current;
+}
+
+function buildGreedySeriousSingle(
+  playingPool: Member[],
+  courtCount: number,
+  getRating: (id: string) => number,
+  usedPairsToday: Set<string>,
+): CourtAssignment[] {
+  const list = playingPool.slice(0, courtCount * 2);
+  const courts: CourtAssignment[] = [];
+  for (let i = 0; i < list.length; i += 2) {
+    if (i + 1 >= list.length) break;
+    let a = list[i];
+    let b = list[i + 1];
+    if (usedPairsToday.has(makePairKey(a.id, b.id)) && i + 3 < list.length) {
+      const c = list[i + 2];
+      const gapOrig = Math.abs(getRating(a.id) - getRating(b.id));
+      const gapSwap = Math.abs(getRating(a.id) - getRating(c.id));
+      if (
+        gapSwap <= gapOrig + MAX_RATING_GAP_FOR_PAIR_AVOID &&
+        !usedPairsToday.has(makePairKey(a.id, c.id))
+      ) {
+        b = c;
+      }
+    }
+    courts.push({ teamAIds: [a.id], teamBIds: [b.id] });
+  }
+  return courts.slice(0, courtCount);
+}
+
+function buildGreedySeriousDouble(
+  playingPool: Member[],
+  courtCount: number,
+  getRating: (id: string) => number,
+  usedPairsToday: Set<string>,
+): CourtAssignment[] {
+  const list = playingPool.slice(0, courtCount * 4);
+  const teams: Member[][] = [];
+  let i = 0;
+  while (i < list.length) {
+    if (i + 1 >= list.length) break;
+    const a = list[i];
+    const b = list[i + 1];
+    if (i + 4 <= list.length && usedPairsToday.has(makePairKey(a.id, b.id))) {
+      const c = list[i + 2];
+      const d = list[i + 3];
+      const gapAb = Math.abs(getRating(a.id) - getRating(b.id));
+      const gapAc = Math.abs(getRating(a.id) - getRating(c.id));
+      if (
+        gapAc <= gapAb + MAX_RATING_GAP_FOR_PAIR_AVOID &&
+        !usedPairsToday.has(makePairKey(a.id, c.id)) &&
+        a.id !== c.id &&
+        b.id !== d.id
+      ) {
+        teams.push([a, c]);
+        teams.push([b, d]);
+        i += 4;
+        continue;
+      }
+    }
+    teams.push([a, b]);
+    i += 2;
+  }
+  teams.sort((teamA, teamB) => {
+    const ratingA =
+      teamA.reduce((sum, member) => sum + getRating(member.id), 0) / 2;
+    const ratingB =
+      teamB.reduce((sum, member) => sum + getRating(member.id), 0) / 2;
+    return ratingA - ratingB;
+  });
+  const courts: CourtAssignment[] = [];
+  for (let j = 0; j < teams.length; j += 2) {
+    if (j + 1 >= teams.length) break;
+    courts.push({
+      teamAIds: teams[j].map((member) => member.id),
+      teamBIds: teams[j + 1].map((member) => member.id),
+    });
+  }
+  return courts.slice(0, courtCount);
+}
+
+function buildGreedyEnjoySingle(
+  playingPool: Member[],
+  courtCount: number,
+): CourtAssignment[] {
+  const courts: CourtAssignment[] = [];
+  const n = playingPool.length;
+  for (let i = 0; i < Math.floor(n / 2); i++) {
+    const low = playingPool[i];
+    const high = playingPool[n - 1 - i];
+    if (!low || !high) continue;
+    courts.push({ teamAIds: [low.id], teamBIds: [high.id] });
+  }
+  return courts.slice(0, courtCount);
+}
+
+function buildGreedyEnjoyDouble(
+  playingPool: Member[],
+  courtCount: number,
+): CourtAssignment[] {
+  const n = playingPool.length;
+  const half = Math.floor(n / 2);
+  const lowGroup = playingPool.slice(0, half);
+  const highGroup = playingPool.slice(n - half);
+  const teams: Member[][] = [];
+  const len = Math.min(lowGroup.length, highGroup.length);
+  for (let i = 0; i < len; i++) {
+    const a = lowGroup[i];
+    const b = highGroup[len - 1 - i];
+    if (a && b) teams.push([a, b]);
+  }
+  const courts: CourtAssignment[] = [];
+  for (let i = 0; i < teams.length; i += 2) {
+    if (i + 1 >= teams.length) break;
+    courts.push({
+      teamAIds: teams[i].map((member) => member.id),
+      teamBIds: teams[i + 1].map((member) => member.id),
+    });
+  }
+  return courts.slice(0, courtCount);
+}
 
 function createId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -101,6 +399,7 @@ type StoredMember = {
   isAdmin?: boolean;
   gender?: "male" | "female";
   isBeginner?: boolean;
+  todayParticipationOffset?: { date: string; offset: number };
 };
 
 function memberFromStorage(m: StoredMember): Member {
@@ -112,6 +411,7 @@ function memberFromStorage(m: StoredMember): Member {
     isAdmin: m.isAdmin ?? false,
     gender: m.gender,
     isBeginner: m.isBeginner ?? false,
+    todayParticipationOffset: m.todayParticipationOffset,
   };
 }
 
@@ -184,6 +484,7 @@ export default function Home() {
       });
     }
     for (const match of matches) {
+      if (match.winner === "invalid") continue;
       const teamAIds = match.teamAIds;
       const teamBIds = match.teamBIds;
       const get = (id: string) => map.get(id) ?? emptyStats();
@@ -331,6 +632,28 @@ export default function Home() {
     );
   };
 
+  const handleUpdateTodayParticipation = (
+    id: string,
+    displayCount: number,
+    fromMatches: number,
+  ) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const safeCount = Math.max(0, Math.round(displayCount));
+    setMembers((prev) =>
+      prev.map((m) =>
+        m.id === id
+          ? {
+              ...m,
+              todayParticipationOffset: {
+                date: today,
+                offset: safeCount - fromMatches,
+              },
+            }
+          : m,
+      ),
+    );
+  };
+
   const handleResetToday = () => {
     setMembers((prev) => prev.map((m) => ({ ...m, activeToday: false })));
     setGeneratedCourts([]);
@@ -358,19 +681,29 @@ export default function Home() {
     const activeAdmins = players.filter((m) => m.isAdmin);
     const restCount = Math.max(0, players.length - maxPlayersUsable);
 
+    const comparePlayPriority = (a: Member, b: Member) => {
+      const partDiff =
+        (participationCountToday.get(a.id) ?? 0) -
+        (participationCountToday.get(b.id) ?? 0);
+      if (partDiff !== 0) return partDiff;
+      return getMemberStats(a.id).rating - getMemberStats(b.id).rating;
+    };
+
     let playingPool: Member[];
-    if (activeAdmins.length > 0 && restCount > 0) {
-      const byParticipation = [...players].sort(
-        (a, b) =>
+    if (restCount > 0) {
+      const byRestPriority = [...players].sort((a, b) => {
+        const partDiff =
           (participationCountToday.get(b.id) ?? 0) -
-          (participationCountToday.get(a.id) ?? 0),
-      );
+          (participationCountToday.get(a.id) ?? 0);
+        if (partDiff !== 0) return partDiff;
+        return getMemberStats(b.id).rating - getMemberStats(a.id).rating;
+      });
       const restPool: Member[] = [];
-      const adminByPart = byParticipation.filter((m) => m.isAdmin);
-      if (adminByPart.length > 0) {
+      const adminByPart = byRestPriority.filter((m) => m.isAdmin);
+      if (activeAdmins.length > 0 && adminByPart.length > 0) {
         restPool.push(adminByPart[0]);
       }
-      for (const p of byParticipation) {
+      for (const p of byRestPriority) {
         if (restPool.length >= restCount) break;
         if (restPool.includes(p)) continue;
         restPool.push(p);
@@ -378,10 +711,10 @@ export default function Home() {
       playingPool = players.filter((p) => !restPool.includes(p));
     } else {
       playingPool = [...players];
-      playingPool.sort(
-        (a, b) =>
-          getMemberStats(a.id).rating - getMemberStats(b.id).rating,
-      );
+    }
+
+    if (playingPool.length > maxPlayersUsable) {
+      playingPool.sort(comparePlayPriority);
       playingPool = playingPool.slice(0, maxPlayersUsable);
     }
 
@@ -392,133 +725,47 @@ export default function Home() {
       return;
     }
 
-    playingPool.sort(
-      (a, b) =>
-        getMemberStats(a.id).rating - getMemberStats(b.id).rating,
-    );
+    playingPool.sort(comparePlayPriority);
 
-    const courts: GeneratedCourt[] = [];
+    const getRating = (id: string) => getMemberStats(id).rating;
+    let courtAssignments: CourtAssignment[] = [];
 
     if (matchMode === "serious") {
-      if (matchType === "single") {
-        const list = playingPool.slice(0, courtCount * 2);
-        const chunked: Member[][] = [];
-        for (let i = 0; i < list.length; i += 2) {
-          if (i + 1 >= list.length) break;
-          let a = list[i];
-          let b = list[i + 1];
-          if (usedPairsToday.has(pairKey(a.id, b.id)) && i + 3 < list.length) {
-            const c = list[i + 2];
-            const d = list[i + 3];
-            const gapOrig = Math.abs(getMemberStats(a.id).rating - getMemberStats(b.id).rating);
-            const gapSwap = Math.abs(getMemberStats(a.id).rating - getMemberStats(c.id).rating);
-            if (gapSwap <= gapOrig + MAX_RATING_GAP_FOR_PAIR_AVOID && !usedPairsToday.has(pairKey(a.id, c.id))) {
-              b = c;
-            }
-          }
-          chunked.push([a, b]);
-        }
-        for (let court = 1; court <= courtCount && court <= chunked.length; court++) {
-          const pair = chunked[court - 1];
-          courts.push({
-            courtNumber: court,
-            teamAIds: [pair[0].id],
-            teamBIds: [pair[1].id],
-            mode: "serious",
-            matchType: "single",
-          });
-        }
-      } else {
-        const list = playingPool.slice(0, courtCount * 4);
-        const teams: Member[][] = [];
-        let i = 0;
-        while (i < list.length) {
-          if (i + 1 >= list.length) break;
-          const a = list[i];
-          const b = list[i + 1];
-          if (
-            i + 4 <= list.length &&
-            usedPairsToday.has(pairKey(a.id, b.id))
-          ) {
-            const c = list[i + 2];
-            const d = list[i + 3];
-            const gapAb = Math.abs(getMemberStats(a.id).rating - getMemberStats(b.id).rating);
-            const gapAc = Math.abs(getMemberStats(a.id).rating - getMemberStats(c.id).rating);
-            if (
-              gapAc <= gapAb + MAX_RATING_GAP_FOR_PAIR_AVOID &&
-              !usedPairsToday.has(pairKey(a.id, c.id)) &&
-              a.id !== c.id &&
-              b.id !== d.id
-            ) {
-              teams.push([a, c]);
-              teams.push([b, d]);
-              i += 4;
-              continue;
-            }
-          }
-          teams.push([a, b]);
-          i += 2;
-        }
-        teams.sort((a, b) => {
-          const ra = a.reduce((s, m) => s + getMemberStats(m.id).rating, 0) / 2;
-          const rb = b.reduce((s, m) => s + getMemberStats(m.id).rating, 0) / 2;
-          return ra - rb;
-        });
-        for (let j = 0; j < teams.length; j += 2) {
-          if (j + 1 >= teams.length) break;
-          courts.push({
-            courtNumber: courts.length + 1,
-            teamAIds: teams[j].map((m) => m.id),
-            teamBIds: teams[j + 1].map((m) => m.id),
-            mode: "serious",
-            matchType: "double",
-          });
-        }
-      }
+      courtAssignments =
+        matchType === "single"
+          ? buildGreedySeriousSingle(
+              playingPool,
+              courtCount,
+              getRating,
+              usedPairsToday,
+            )
+          : buildGreedySeriousDouble(
+              playingPool,
+              courtCount,
+              getRating,
+              usedPairsToday,
+            );
     } else {
-      if (matchType === "single") {
-        const n = playingPool.length;
-        const pairs: Member[][] = [];
-        for (let i = 0; i < Math.floor(n / 2); i++) {
-          const low = playingPool[i];
-          const high = playingPool[n - 1 - i];
-          if (!low || !high) continue;
-          pairs.push([low, high]);
-        }
-        for (let court = 1; court <= courtCount && court <= pairs.length; court++) {
-          const pair = pairs[court - 1];
-          courts.push({
-            courtNumber: court,
-            teamAIds: [pair[0].id],
-            teamBIds: [pair[1].id],
-            mode: "enjoy",
-            matchType: "single",
-          });
-        }
-      } else {
-        const n = playingPool.length;
-        const half = Math.floor(n / 2);
-        const lowGroup = playingPool.slice(0, half);
-        const highGroup = playingPool.slice(n - half);
-        const tempTeams: Member[][] = [];
-        const len = Math.min(lowGroup.length, highGroup.length);
-        for (let i = 0; i < len; i++) {
-          const a = lowGroup[i];
-          const b = highGroup[len - 1 - i];
-          if (a && b) tempTeams.push([a, b]);
-        }
-        for (let i = 0; i < tempTeams.length; i += 2) {
-          if (i + 1 >= tempTeams.length) break;
-          courts.push({
-            courtNumber: courts.length + 1,
-            teamAIds: tempTeams[i].map((m) => m.id),
-            teamBIds: tempTeams[i + 1].map((m) => m.id),
-            mode: "enjoy",
-            matchType: "double",
-          });
-        }
-      }
+      courtAssignments =
+        matchType === "single"
+          ? buildGreedyEnjoySingle(playingPool, courtCount)
+          : buildGreedyEnjoyDouble(playingPool, courtCount);
     }
+
+    courtAssignments = optimizeCourtAssignments(
+      courtAssignments,
+      matchType,
+      getRating,
+      pairCountToday,
+    );
+
+    const courts: GeneratedCourt[] = courtAssignments.map((assignment, index) => ({
+      courtNumber: index + 1,
+      teamAIds: assignment.teamAIds,
+      teamBIds: assignment.teamBIds,
+      mode: matchMode,
+      matchType,
+    }));
 
     if (courts.length === 0) {
       setErrorMessage("参加人数が足りないためペアを生成できませんでした。");
@@ -552,7 +799,7 @@ export default function Home() {
     setGeneratedCourts(courts);
   };
 
-  const handleRecordResult = (court: GeneratedCourt, winner: WinnerSide) => {
+  const handleRecordResult = (court: GeneratedCourt, winner: "A" | "B") => {
     setMatches((prev) => [
       ...prev,
       {
@@ -629,9 +876,9 @@ export default function Home() {
     }
   };
 
-  const handleEditMatchWinner = (matchId: string, newWinner: WinnerSide) => {
+  const handleEditMatchResult = (matchId: string, newResult: MatchResult) => {
     setMatches((prev) =>
-      prev.map((m) => (m.id === matchId ? { ...m, winner: newWinner } : m)),
+      prev.map((m) => (m.id === matchId ? { ...m, winner: newResult } : m)),
     );
     setEditingMatchId(null);
   };
@@ -690,6 +937,7 @@ export default function Home() {
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     );
     for (const match of sortedMatches) {
+      if (match.winner === "invalid") continue;
       const teamAIds = match.teamAIds;
       const teamBIds = match.teamBIds;
       const get = (id: string) => curRatings.get(id) ?? INITIAL_RATING;
@@ -738,6 +986,7 @@ export default function Home() {
     const map = new Map<PairKey, PairAgg>();
 
     for (const match of matches) {
+      if (match.winner === "invalid") continue;
       if (match.matchType !== "double") continue;
 
       const teamPairs = [match.teamAIds, match.teamBIds];
@@ -836,7 +1085,7 @@ export default function Home() {
     [matches, todayStr],
   );
 
-  const participationCountToday = useMemo(() => {
+  const todayMatchCountFromRecords = useMemo(() => {
     const map = new Map<string, number>();
     for (const m of members) {
       map.set(m.id, 0);
@@ -848,6 +1097,19 @@ export default function Home() {
     }
     return map;
   }, [members, todayMatches]);
+
+  const participationCountToday = useMemo(() => {
+    const result = new Map<string, number>();
+    for (const m of members) {
+      const base = todayMatchCountFromRecords.get(m.id) ?? 0;
+      const offset =
+        m.todayParticipationOffset?.date === todayStr
+          ? m.todayParticipationOffset.offset
+          : 0;
+      result.set(m.id, base + offset);
+    }
+    return result;
+  }, [members, todayMatchCountFromRecords, todayStr]);
 
   const usedPairsToday = useMemo(() => {
     const set = new Set<string>();
@@ -1199,6 +1461,7 @@ export default function Home() {
                     <thead className="sticky top-0 bg-gray-100 text-xs font-semibold uppercase tracking-wide text-gray-700">
                       <tr>
                         <th className="px-3 py-2">今日参加</th>
+                        <th className="px-3 py-2">今日試合</th>
                         <th className="px-3 py-2">管理者</th>
                         <th className="px-3 py-2">名前</th>
                         <th className="px-3 py-2">性別</th>
@@ -1223,6 +1486,26 @@ export default function Home() {
                                 checked={m.activeToday}
                                 onChange={() => toggleActiveToday(m.id)}
                                 className="h-4 w-4"
+                              />
+                            </td>
+                            <td className="px-3 py-2">
+                              <input
+                                type="number"
+                                min={0}
+                                max={99}
+                                value={participationCountToday.get(m.id) ?? 0}
+                                onChange={(e) => {
+                                  const v = parseInt(e.target.value, 10);
+                                  if (!Number.isNaN(v)) {
+                                    handleUpdateTodayParticipation(
+                                      m.id,
+                                      v,
+                                      todayMatchCountFromRecords.get(m.id) ?? 0,
+                                    );
+                                  }
+                                }}
+                                className="w-14 rounded border border-gray-300 px-1.5 py-0.5 text-center text-sm font-mono"
+                                title="途中参加の人はここで本日の試合回数を調整できます"
                               />
                             </td>
                             <td className="px-3 py-2">
@@ -1799,11 +2082,11 @@ export default function Home() {
                             </td>
                             <td className="px-3 py-2">
                               {isEditing ? (
-                                <span className="flex gap-1">
+                                <span className="flex flex-wrap gap-1">
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      handleEditMatchWinner(match.id, "A")
+                                      handleEditMatchResult(match.id, "A")
                                     }
                                     className="rounded bg-blue-600 px-2 py-1 text-xs font-semibold text-white hover:bg-blue-700"
                                   >
@@ -1812,11 +2095,20 @@ export default function Home() {
                                   <button
                                     type="button"
                                     onClick={() =>
-                                      handleEditMatchWinner(match.id, "B")
+                                      handleEditMatchResult(match.id, "B")
                                     }
                                     className="rounded bg-orange-600 px-2 py-1 text-xs font-semibold text-white hover:bg-orange-700"
                                   >
                                     Bに変更
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      handleEditMatchResult(match.id, "invalid")
+                                    }
+                                    className="rounded bg-gray-600 px-2 py-1 text-xs font-semibold text-white hover:bg-gray-700"
+                                  >
+                                    無効
                                   </button>
                                   <button
                                     type="button"
@@ -1825,6 +2117,10 @@ export default function Home() {
                                   >
                                     キャンセル
                                   </button>
+                                </span>
+                              ) : match.winner === "invalid" ? (
+                                <span className="font-semibold text-gray-500">
+                                  無効
                                 </span>
                               ) : (
                                 <span className="font-semibold">
@@ -2186,7 +2482,11 @@ export default function Home() {
                     <ul className="space-y-1.5 text-sm text-gray-700">
                       {recentMatches.map((match) => {
                         const isA = match.teamAIds.includes(statsDetailMemberId);
-                        const won = (match.winner === "A" && isA) || (match.winner === "B" && !isA);
+                        const isInvalid = match.winner === "invalid";
+                        const won =
+                          !isInvalid &&
+                          ((match.winner === "A" && isA) ||
+                            (match.winner === "B" && !isA));
                         const dateStr = new Date(match.timestamp).toLocaleString("ja-JP", {
                           month: "numeric",
                           day: "numeric",
@@ -2200,8 +2500,16 @@ export default function Home() {
                         return (
                           <li key={match.id} className="flex flex-wrap items-center gap-1 rounded bg-gray-50 px-2 py-1">
                             <span className="text-gray-500">{dateStr}</span>
-                            <span className={won ? "font-medium text-green-700" : "text-red-600"}>
-                              {won ? "勝" : "敗"}
+                            <span
+                              className={
+                                isInvalid
+                                  ? "font-medium text-gray-500"
+                                  : won
+                                    ? "font-medium text-green-700"
+                                    : "text-red-600"
+                              }
+                            >
+                              {isInvalid ? "無効" : won ? "勝" : "敗"}
                             </span>
                             <span className="text-gray-600">vs {vs}</span>
                             <span className="text-gray-400">({modeLabel})</span>
